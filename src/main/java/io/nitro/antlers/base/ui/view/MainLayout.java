@@ -82,7 +82,7 @@ public final class MainLayout extends AppLayout {
                     event -> UI.getCurrent().getPage().open(user.getProfileUrl()));
         }
         // TODO Add additional items to the user menu if needed
-        userMenuItem.getSubMenu().addItem("Logou", event -> authenticationContext.logout());
+        userMenuItem.getSubMenu().addItem("Logout", event -> authenticationContext.logout());
 
         return userMenu;
     }

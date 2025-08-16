@@ -7,10 +7,10 @@ import org.springframework.security.config.annotation.web.builders.HttpSecurity;
 
 @Configuration
 public class SecurityConfiguration extends VaadinWebSecurity {
-
-    @Override
-    protected void configure(HttpSecurity http) throws Exception {
-        super.configure(http);
-        setLoginView(http, LoginView.class); // Указываем кастомный экран логина
-    }
+  @Override
+  protected void configure(HttpSecurity http) throws Exception {
+    super.configure(http);                      // добавит anyRequest().authenticated()
+    setLoginView(http, LoginView.class);
+  }
 }
+

@@ -32,7 +32,7 @@ public class LoginView extends VerticalLayout {
         Button createBtn = new Button("Создать персонажа");
         createBtn.getStyle().set("margin-left", "12px");
         createBtn.addClickListener(e ->
-            UI.getCurrent().getPage().open("/create.html") // открываем статический ресурс напрямую
+            UI.getCurrent().navigate("create")
         );
 
         HorizontalLayout actions = new HorizontalLayout(loginBtn, createBtn);
