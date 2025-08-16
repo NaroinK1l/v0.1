@@ -1,0 +1,37 @@
+<script type="module">
+  import { initializeApp } from "https://www.gstatic.com/firebasejs/10.12.0/firebase-app.js";
+  import { getAuth, signInWithCustomToken, onAuthStateChanged, connectAuthEmulator } from "https://www.gstatic.com/firebasejs/10.12.0/firebase-auth.js";
+  import { getFunctions, httpsCallable, connectFunctionsEmulator } from "https://www.gstatic.com/firebasejs/10.12.0/firebase-functions.js";
+  import { getFirestore, connectFirestoreEmulator } from "https://www.gstatic.com/firebasejs/10.12.0/firebase-firestore.js";
+
+  const firebaseConfig = {
+    apiKey: "demo",
+    authDomain: "demo.firebaseapp.com",
+    projectId: "demo-rpvo1",
+    appId: "demo"
+  };
+
+  const app = initializeApp(firebaseConfig);
+  const auth = getAuth(app);
+  const db = getFirestore(app);
+  const functions = getFunctions(app);
+
+  // Подключаемся к локальным эмуляторам
+  connectAuthEmulator(auth, "http://127.0.0.1:9099");       // если Auth эмулятор включишь позже
+  connectFirestoreEmulator(db, "127.0.0.1", 8080);
+  connectFunctionsEmulator(functions, "127.0.0.1", 5001);
+
+  async function register(nick, pin, noPin) {
+    const fn = httpsCallable(functions, "registerUser");
+    const res = await fn({ nick, pin, noPin });
+    await signInWithCustomToken(auth, res.data.token);
+  }
+
+  async function login(nick, pin) {
+    const fn = httpsCallable(functions, "loginUser");
+    const res = await fn({ nick, pin });
+    await signInWithCustomToken(auth, res.data.token);
+  }
+
+  // ...дальше тот же UI-код с кнопками (см. прошлое сообщение)
+</script>
