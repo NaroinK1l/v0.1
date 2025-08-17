@@ -22,7 +22,7 @@ import { getFunctions, httpsCallable, connectFunctionsEmulator } from "https://w
 
 const app = initializeApp(firebaseConfig);
 export const auth = getAuth(app);
-export const functions = getFunctions(app);
+export const functions = getFunctions(app, "us-central1");
 
 if (USE_EMULATORS) {
   try { connectAuthEmulator(auth, "http://127.0.0.1:9099"); } catch (_) {}
@@ -49,10 +49,14 @@ export async function fbLogin({ nick, pin }) {
   await signInWithCustomToken(auth, res.data.token);
   return res.data;
 }
-
+export async function createCharacter(payload) {
+  const call = httpsCallable(functions, "createCharacter");
+  const res = await call(payload);
+  return res?.data?.id || null;
+}
 export function fbOnAuth(cb) {
   return onAuthStateChanged(auth, cb);
 }
 
 // Делаем функции доступными глобально для вызова из Vaadin Java:
-window._fb = { fbLogin, fbRegister, fbOnAuth };
+window._fb = { fbLogin, fbRegister, fbOnAuth, createCharacter };

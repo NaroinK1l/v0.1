@@ -38,7 +38,6 @@ public final class MainLayout extends AppLayout {
     }
 
     private Div createHeader() {
-        // TODO Replace with real application logo and name
         var appLogo = VaadinIcon.CUBES.create();
         appLogo.addClassNames(TextColor.PRIMARY, IconSize.LARGE);
 
@@ -81,7 +80,6 @@ public final class MainLayout extends AppLayout {
             userMenuItem.getSubMenu().addItem("View Profile",
                     event -> UI.getCurrent().getPage().open(user.getProfileUrl()));
         }
-        // TODO Add additional items to the user menu if needed
         userMenuItem.getSubMenu().addItem("Logout", event -> authenticationContext.logout());
 
         return userMenu;

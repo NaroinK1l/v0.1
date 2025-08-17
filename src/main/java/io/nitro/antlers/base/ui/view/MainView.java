@@ -16,7 +16,6 @@ import jakarta.annotation.security.PermitAll;
 @PermitAll // When security is enabled, allow all authenticated users
 public final class MainView extends Main {
 
-    // TODO Replace with your own main view.
 
     MainView() {
         addClassName(LumoUtility.Padding.MEDIUM);
