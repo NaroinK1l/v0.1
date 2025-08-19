@@ -190,35 +190,43 @@ public class CreateCharacterView extends VerticalLayout {
         if (rolledElement == Element.NONE) finalElement = null;
 
         String pin = null;
+        boolean noPin = true;
         if (Boolean.TRUE.equals(wantsPin.getValue())) {
             String p1 = pin1.getValue(), p2 = pin2.getValue();
             if (p1 == null || p2 == null || !p1.matches("\\d{4,8}") || !p1.equals(p2)) {
-                Notification.show("PIN должен быть 4–8 цифр и совпадать в обоих полях."); pin1.focus(); return;
+                Notification.show("PIN должен быть 4–8 цифр и совпадать в обоих полях.");
+                pin1.focus(); return;
             }
             pin = p1;
+            noPin = false;
         }
 
+        // Готовим payload для fbRegisterAndCreate:
+        // nick — ник аккаунта; name — имя персонажа (если отдельного поля нет, берём ник);
         JsonObject payload = Json.createObject();
-        payload.put("nickname", nick);
+        payload.put("nick", nick);
+        payload.put("name", nick); // если будет отдельное поле имени — подставь его сюда
         payload.put("race", r.name());
-        payload.put("element", finalElement != null ? finalElement.name() : "");
+        payload.put("element", finalElement != null ? finalElement.name() : null);
         payload.put("pin", pin != null ? pin : "");
+        payload.put("noPin", noPin);
 
         UI.getCurrent().getPage().executeJs("""
-          return (async () => {
+        return (async () => {
             try {
-                if (!window._fb || !window._fb.createCharacter) {
-                alert('Firebase: не найден _fb.createCharacter. Проверь /firebase-app.js.');
+            if (!window._fb || !window._fb.fbRegisterAndCreate) {
+                alert('Firebase: не найден _fb.fbRegisterAndCreate. Проверь /firebase-app.js.');
                 return false;
-                }
-                await window._fb.createCharacter($0);
-              window.location = '/login';
-              return true;
-            } catch (e) {
-              alert('Ошибка сохранения: ' + (e?.message || e));
-              return false;
             }
-          })();
+            const res = await window._fb.fbRegisterAndCreate($0);
+            // res: { token, characterId }
+            window.location = '/login'; // или на страницу персонажа
+            return true;
+            } catch (e) {
+            alert('Ошибка сохранения: ' + (e?.message || e));
+            return false;
+            }
+        })();
         """, payload);
     }
 

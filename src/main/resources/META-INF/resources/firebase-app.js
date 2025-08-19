@@ -17,46 +17,70 @@ export const firebaseConfig = USE_EMULATORS ? {
 
 // ========== SDK ==========
 import { initializeApp } from "https://www.gstatic.com/firebasejs/10.12.0/firebase-app.js";
-import { getAuth, signInWithCustomToken, onAuthStateChanged, connectAuthEmulator } from "https://www.gstatic.com/firebasejs/10.12.0/firebase-auth.js";
-import { getFunctions, httpsCallable, connectFunctionsEmulator } from "https://www.gstatic.com/firebasejs/10.12.0/firebase-functions.js";
+import {
+  getAuth, signInWithCustomToken, onAuthStateChanged, connectAuthEmulator
+} from "https://www.gstatic.com/firebasejs/10.12.0/firebase-auth.js";
+import {
+  getFunctions, httpsCallable, connectFunctionsEmulator
+} from "https://www.gstatic.com/firebasejs/10.12.0/firebase-functions.js";
 
 const app = initializeApp(firebaseConfig);
 export const auth = getAuth(app);
 export const functions = getFunctions(app, "us-central1");
 
 if (USE_EMULATORS) {
-  try { connectAuthEmulator(auth, "http://127.0.0.1:9099"); } catch (_) {}
+  try {
+    connectAuthEmulator(auth, "http://127.0.0.1:9099", { disableWarnings: true });
+  } catch (_) {}
   connectFunctionsEmulator(functions, "127.0.0.1", 5001);
 }
 
 // ========== HELPERS ==========
-const NICK_RE = /^[А-Яа-яЁёІіЇїЄєҐґ]{2,30}$/;
 
-export async function fbRegister({ nick, pin, noPin }) {
-  if (!NICK_RE.test(nick)) throw new Error("Ник: только кириллица (2–30).");
-  if (!noPin && !/^\d{4,6}$/.test(pin)) throw new Error("PIN: 4–6 цифр или отметьте «без PIN».");
-
-  const call = httpsCallable(functions, "registerUser");
-  const res = await call({ nick, pin, noPin });
-  await signInWithCustomToken(auth, res.data.token);
-  return res.data;
+// Регистрация + создание первого персонажа + моментальный вход
+export async function fbRegisterAndCreate({ nick, name, pin, noPin, race, element }) {
+  const call = httpsCallable(functions, "registerAndCreateCharacter");
+  const { data } = await call({ nick, name, pin, noPin, race, element });
+  await signInWithCustomToken(auth, data.token);
+  return data; // { token, characterId }
 }
 
-export async function fbLogin({ nick, pin }) {
-  if (!NICK_RE.test(nick)) throw new Error("Ник: только кириллица (2–30).");
+// Вход БЕЗ PIN (для чекбокса «без PIN»)
+export async function fbLogin({ nick }) {
   const call = httpsCallable(functions, "loginUser");
-  const res = await call({ nick, pin });
-  await signInWithCustomToken(auth, res.data.token);
-  return res.data;
+  const { data } = await call({ nick });
+  await signInWithCustomToken(auth, data.token);
+  return data;
 }
+
+// Вход по ник+PIN
+export async function fbLoginWithPin({ nick, pin }) {
+  const call = httpsCallable(functions, "loginWithPin");
+  const { data } = await call({ nick, pin });
+  await signInWithCustomToken(auth, data.token);
+  return data;
+}
+
+// Создание ДОПОЛНИТЕЛЬНЫХ персонажей (после входа)
 export async function createCharacter(payload) {
   const call = httpsCallable(functions, "createCharacter");
-  const res = await call(payload);
-  return res?.data?.id || null;
+  const { data } = await call(payload);
+  return data?.id || null;
 }
+
+// Сводка аккаунта (ник + последний персонаж)
+export async function fbGetAccountSummary() {
+  const call = httpsCallable(functions, "getAccountSummary");
+  const { data } = await call();
+  return data; // { uid, character: { id, name, race, element } | null }
+}
+
 export function fbOnAuth(cb) {
   return onAuthStateChanged(auth, cb);
 }
 
-// Делаем функции доступными глобально для вызова из Vaadin Java:
-window._fb = { fbLogin, fbRegister, fbOnAuth, createCharacter };
+// Глобально для Vaadin Java:
+window._fb = {
+  fbRegisterAndCreate, fbLogin, fbLoginWithPin, fbGetAccountSummary,
+  fbOnAuth, createCharacter
+};

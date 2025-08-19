@@ -12,11 +12,13 @@ import com.vaadin.flow.component.textfield.PasswordField;
 import com.vaadin.flow.component.textfield.TextField;
 import com.vaadin.flow.router.PageTitle;
 import com.vaadin.flow.router.Route;
+import com.vaadin.flow.server.VaadinSession;
 import com.vaadin.flow.server.auth.AnonymousAllowed;
 import elemental.json.JsonObject;
+import elemental.json.JsonType;
 import elemental.json.JsonValue;
 
-@PageTitle("Вход/Регистрация")
+@PageTitle("Вход")
 @Route("auth")
 @AnonymousAllowed
 public class LoginView extends VerticalLayout {
@@ -34,7 +36,7 @@ public class LoginView extends VerticalLayout {
         setPadding(true);
         setSpacing(true);
 
-        // Грузим модульный firebase-скрипт, лежащий в META-INF/resources/firebase-app.js
+        // Firebase helpers (META-INF/resources/firebase-app.js)
         UI.getCurrent().getPage().addJsModule("/firebase-app.js");
 
         H1 title = new H1("Вход/Регистрация");
@@ -42,9 +44,7 @@ public class LoginView extends VerticalLayout {
         nick.setPlaceholder("Например: Орлан");
         nick.setMaxLength(24);
         nick.setHelperText("3–24 символа, буквы/цифры/пробел/._-");
-        nick.setWidth("320px");
 
-        pin.setWidth("320px");
         pin.setRevealButtonVisible(true);
 
         noPin.addValueChangeListener(e -> {
@@ -56,7 +56,7 @@ public class LoginView extends VerticalLayout {
         registerBtn.addClickListener(e -> doRegister());
         loginBtn.addClickListener(e -> doLogin());
 
-        // ENTER = Войти (shortcut вместо addKeyPressListener)
+        // ENTER = Войти
         loginBtn.addClickShortcut(Key.ENTER);
 
         FormLayout form = new FormLayout();
@@ -69,25 +69,28 @@ public class LoginView extends VerticalLayout {
     private void doRegister() {
         String n = nick.getValue() == null ? "" : nick.getValue().trim();
         String p = pin.isEnabled() ? (pin.getValue() == null ? "" : pin.getValue().trim()) : "";
+        boolean withoutPin = Boolean.TRUE.equals(noPin.getValue());
 
         if (n.length() < 3) {
             Notification.show("Введите ник (минимум 3 символа)");
             return;
         }
 
+        // Регистрируем аккаунт, создаём первого персонажа (name = nick, race=NATIS)
         UI.getCurrent().getPage().executeJs("""
             (async () => {
               try {
-                if (!window._fb || !window._fb.fbRegister) {
-                  throw new Error("Firebase: не найден _fb.fbRegister. Проверь /firebase-app.js");
+                if (!window._fb?.fbRegisterAndCreate || !window._fb?.fbGetAccountSummary) {
+                  throw new Error('Firebase helpers not loaded');
                 }
-                const res = await window._fb.fbRegister({nick: $0, pin: $1, noPin: $2});
-                return { ok: true, res };
+                await window._fb.fbRegisterAndCreate({ nick: $0, name: $0, pin: $1, noPin: $2, race: 'NATIS', element: null });
+                const sum = await window._fb.fbGetAccountSummary();
+                return { ok: true, sum };
               } catch (e) {
                 return { ok: false, err: String(e && e.message || e) };
               }
             })()
-            """, n, p, noPin.getValue()
+        """, n, p, withoutPin
         ).then((JsonValue json) -> {
             JsonObject obj = (JsonObject) json;
             boolean ok = obj.getBoolean("ok");
@@ -96,14 +99,16 @@ public class LoginView extends VerticalLayout {
                 Notification.show("Ошибка регистрации: " + err, 5000, Notification.Position.MIDDLE);
                 return;
             }
+            persistSummaryToSession(obj.getObject("sum"));
             Notification.show("Успешная регистрация", 2000, Notification.Position.MIDDLE);
-            UI.getCurrent().navigate("create");
+            UI.getCurrent().navigate("profile");
         });
     }
 
     private void doLogin() {
         String n = nick.getValue() == null ? "" : nick.getValue().trim();
         String p = pin.isEnabled() ? (pin.getValue() == null ? "" : pin.getValue().trim()) : "";
+        boolean withoutPin = Boolean.TRUE.equals(noPin.getValue());
 
         if (n.length() < 3) {
             Notification.show("Введите ник (минимум 3 символа)");
@@ -113,16 +118,19 @@ public class LoginView extends VerticalLayout {
         UI.getCurrent().getPage().executeJs("""
             (async () => {
               try {
-                if (!window._fb || !window._fb.fbLogin) {
-                  throw new Error("Firebase: не найден _fb.fbLogin. Проверь /firebase-app.js");
+                if (!window._fb) throw new Error('Firebase helpers not loaded');
+                if ($2) {
+                  await window._fb.fbLogin({ nick: $0 });
+                } else {
+                  await window._fb.fbLoginWithPin({ nick: $0, pin: $1 });
                 }
-                const res = await window._fb.fbLogin({nick: $0, pin: $1, noPin: $2});
-                return { ok: true, res };
+                const sum = await window._fb.fbGetAccountSummary();
+                return { ok: true, sum };
               } catch (e) {
                 return { ok: false, err: String(e && e.message || e) };
               }
             })()
-            """, n, p, noPin.getValue()
+        """, n, p, withoutPin
         ).then((JsonValue json) -> {
             JsonObject obj = (JsonObject) json;
             boolean ok = obj.getBoolean("ok");
@@ -131,8 +139,33 @@ public class LoginView extends VerticalLayout {
                 Notification.show("Ошибка входа: " + err, 5000, Notification.Position.MIDDLE);
                 return;
             }
+            persistSummaryToSession(obj.getObject("sum"));
             Notification.show("Добро пожаловать!", 1500, Notification.Position.MIDDLE);
-            UI.getCurrent().navigate("create");
+            UI.getCurrent().navigate("profile");
         });
+    }
+
+    private void persistSummaryToSession(JsonObject sum) {
+        VaadinSession s = VaadinSession.getCurrent();
+        s.setAttribute("profile.uid", sum.getString("uid"));
+
+        JsonValue chVal = sum.get("character");
+        boolean hasCharacter = (chVal != null) && (chVal.getType() == JsonType.OBJECT);
+
+        if (hasCharacter) {
+            JsonObject ch = (JsonObject) chVal;
+            s.setAttribute("profile.charId",  ch.getString("id"));
+            s.setAttribute("profile.name",    ch.getString("name"));
+            s.setAttribute("profile.race",    ch.getString("race"));
+
+            JsonValue elVal = ch.get("element");
+            String element = (elVal != null && elVal.getType() == JsonType.STRING) ? ch.getString("element") : null;
+            s.setAttribute("profile.element", element);
+        } else {
+            s.setAttribute("profile.charId",  null);
+            s.setAttribute("profile.name",    null);
+            s.setAttribute("profile.race",    null);
+            s.setAttribute("profile.element", null);
+        }
     }
 }
