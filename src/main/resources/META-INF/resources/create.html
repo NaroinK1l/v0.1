@@ -1,6 +1,7 @@
 <!doctype html>
 <html lang="ru">
 <head>
+  <script type="module" src="/firebase-app.js"></script>
   <meta charset="utf-8"/>
   <meta name="viewport" content="width=device-width, initial-scale=1"/>
   <title>Создание персонажа</title>
@@ -10,7 +11,7 @@
     .row { display:flex; gap:12px; }
     .row > * { flex:1; }
     label { display:block; margin-top:12px; font-weight:600; }
-    input[type="text"], input[type="password"] { width:100%; padding:10px 12px; border:1px solid #dcdfe4; border-radius:10px; }
+    input[type="text"], input[type="password"], select { width:100%; padding:10px 12px; border:1px solid #dcdfe4; border-radius:10px; }
     .muted { color:#667085; font-size:12px; margin-top:6px; }
     .badge { display:inline-block; padding:6px 10px; border-radius:999px; background:#eef2ff; margin-left:6px; }
     .actions { display:flex; gap:12px; margin-top:16px; }
@@ -27,9 +28,25 @@
     <div>Бросок 1d8: <span id="roll" class="badge">—</span></div>
     <div class="muted">Определяет стихию.</div>
     <div style="margin-top:8px;">
-      <button id="reroll" class="ghost">Перебросить</button>
+      <button id="reroll" class="ghost" type="button">Кинуть кубик</button>
     </div>
     <div style="margin-top:8px;">Стихия: <strong id="element">—</strong></div>
+
+    <!-- Появляется ТОЛЬКО если выпало 8 -->
+    <div id="manual-element-wrap" style="display:none; margin-top:8px;">
+      <label for="manual-element">Выберите элемент (выпало 8):</label>
+      <select id="manual-element">
+        <option value="fire">Огонь</option>
+        <option value="water">Вода</option>
+        <option value="earth">Земля</option>
+        <option value="air">Воздух</option>
+        <option value="light">Свет</option>
+        <option value="shadow">Тьма</option>
+        <option value="ice">Лёд</option>
+        <option value="arcane">Аркана</option>
+      </select>
+      <div class="muted">При выпавшем 8 можно выбрать стихию вручную.</div>
+    </div>
 
     <label>Ник (только кириллица, 2–30)
       <input id="nick" type="text" pattern="[А-Яа-яЁёІіЇїЄєҐґ]{2,30}" placeholder="Напр.: Орлан">
@@ -47,8 +64,8 @@
     </div>
 
     <div class="actions">
-      <button id="create" class="primary">Зарегистрировать</button>
-      <button id="back" class="ghost">Назад</button>
+      <button id="create" class="primary" type="button">Зарегистрировать</button>
+      <button id="back" class="ghost" type="button">Назад</button>
     </div>
 
     <div id="msg" class="muted" style="margin-top:10px;"></div>
@@ -56,47 +73,92 @@
   </div>
 
   <script type="module">
-    import "./firebase-app.js";              // подключаем общий модуль
-    const { fbRegister } = window._fb;
+    // общий модуль с функциями
+    import "./firebase-app.js";
 
-    const map = {
-      1: "Без элемента (можно выбрать позже)",
-      2: "Огонь", 3: "Лёд", 4: "Вода",
-      5: "Ветер", 6: "Земля", 7: "Молния",
-      8: "Выбор любого элемента"
-    };
+    // соответствия выпавшему числу → элемент (кроме 8)
+    const ELEMENTS = ['fire','water','earth','air','light','shadow','ice','arcane'];
+    const NAMES    = {fire:'Огонь',water:'Вода',earth:'Земля',air:'Воздух',light:'Свет',shadow:'Тьма',ice:'Лёд',arcane:'Аркана'};
 
-    const rollEl = document.getElementById("roll");
-    const elemEl = document.getElementById("element");
-    const rerollBtn = document.getElementById("reroll");
-    const nickEl = document.getElementById("nick");
-    const noPinEl = document.getElementById("noPin");
-    const pinEl = document.getElementById("pin");
-    const createBtn = document.getElementById("create");
-    const backBtn = document.getElementById("back");
-    const msgEl = document.getElementById("msg");
-    const errEl = document.getElementById("err");
+    const rollEl   = document.getElementById("roll");
+    const elemEl   = document.getElementById("element");
+    const reroll   = document.getElementById("reroll");
+    const nickEl   = document.getElementById("nick");
+    const noPinEl  = document.getElementById("noPin");
+    const pinEl    = document.getElementById("pin");
+    const create   = document.getElementById("create");
+    const back     = document.getElementById("back");
+    const msgEl    = document.getElementById("msg");
+    const errEl    = document.getElementById("err");
 
-    function d8(){ return Math.floor(Math.random()*8)+1; }
-    function setRoll(n){ rollEl.textContent=String(n); elemEl.textContent=map[n]; }
+    const manualWrap = document.getElementById("manual-element-wrap");
+    const manualSel  = document.getElementById("manual-element");
+
+    let allowManual = false;     // true, когда выпало 8
+    let chosenElement = null;    // элемент при броске 1..7
+
+    function d8(){ return 1 + Math.floor(Math.random()*8); }
+    function setRoll(n){
+      rollEl.textContent = String(n);
+      if (n === 8) {
+        allowManual   = true;
+        chosenElement = null;
+        manualWrap.style.display = "";
+        elemEl.textContent = "Выбор любого элемента";
+      } else {
+        allowManual   = false;
+        manualWrap.style.display = "none";
+        chosenElement = ELEMENTS[n - 1];
+        elemEl.textContent = NAMES[chosenElement];
+      }
+    }
+
+    // стартовый бросок
     setRoll(d8());
-    rerollBtn.onclick = () => setRoll(d8());
-    noPinEl.onchange = () => { pinEl.disabled = noPinEl.checked; if (noPinEl.checked) pinEl.value=""; }
-    function info(t){ msgEl.textContent=t||""; }
-    function fail(t){ errEl.textContent=t||""; }
+    // переброс
+    reroll.addEventListener("click", () => setRoll(d8()));
 
-    createBtn.onclick = async () => {
+    // PIN on/off
+    noPinEl.addEventListener("change", () => {
+      pinEl.disabled = noPinEl.checked;
+      if (noPinEl.checked) pinEl.value = "";
+    });
+
+    function info(t){ msgEl.textContent = t || ""; }
+    function fail(t){ errEl.textContent = t || ""; }
+
+    // создать игрока + персонажа и сразу войти → /profile
+    create.addEventListener("click", async () => {
       info("Регистрируем…"); fail("");
+
+      const nick  = (nickEl.value||"").trim();
+      const noPin = !!noPinEl.checked;
+      const pin   = (pinEl.value||"").trim();
+
+      // если 8 — берём ручной выбор, иначе — выпавший
+      const element = allowManual ? manualSel.value : chosenElement;
+
       try {
-        const nick = (nickEl.value||"").trim();
-        const noPin = !!noPinEl.checked;
-        const pin = (pinEl.value||"").trim();
-        await fbRegister({ nick, pin, noPin });
-        info("Готово! Возврат к входу…");
-        window.location.href="/login";
-      } catch(e){ info(""); fail(e?.message || String(e)); }
-    };
-    backBtn.onclick = () => history.back();
+        const { fbRegisterAndCreate } = window._fb;
+        if (!fbRegisterAndCreate) throw new Error("firebase-app.js не загружен");
+
+        const res = await fbRegisterAndCreate({
+          nick, name: nick,
+          pin, noPin,
+          race: "Натис",          // т.к. в этой разметке поля расы нет
+          element: element || null
+        });
+
+        if (!res || res.ok !== true) throw new Error(res?.err || "unknown");
+        // уже залогинились по custom token — идём на профиль
+        location.assign("/profile");
+      } catch (e) {
+        info("");
+        fail(e?.message || String(e));
+      }
+    });
+
+    back.addEventListener("click", () => history.back());
   </script>
 </body>
 </html>

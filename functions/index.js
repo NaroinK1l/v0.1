@@ -1,126 +1,199 @@
-// Cloud Functions for Firebase (v2, Node 20)
+/**
+ * Firebase Functions v2 (JS)
+ * Логика регистрации, логина и выдачи краткой сводки профиля.
+ * Айди пользователя генерируется в формате 21052019NNNN по счётчику.
+ */
+
 const { onCall, HttpsError } = require("firebase-functions/v2/https");
-const { initializeApp } = require("firebase-admin/app");
-const { getAuth } = require("firebase-admin/auth");
-const { getFirestore } = require("firebase-admin/firestore");
+const { logger } = require("firebase-functions");
+const admin = require("firebase-admin");
+
+// Инициализация Admin SDK (разрешит работать с Firestore/Auth из функций)
+try {
+  admin.app();
+} catch (e) {
+  admin.initializeApp();
+}
+
+const db = admin.firestore();
+const auth = admin.auth();
+
+/** Имя коллекции с профилями */
+const USERS = "users";
+/** Документ со счётчиком регистраций */
+const COUNTER_DOC = "meta/counters";     // коллекция meta, документ counters
+const COUNTER_FIELD = "usersNext";        // поле со следующим номером
+/** Префикс айди */
+const ID_PREFIX = "21052019";
+/** Сколько цифр в порядковом номере */
+const SEQ_WIDTH = 4;
+
+/** Простейшее хэширование PIN (sha256). Можно заменить на bcrypt, если нужно. */
 const crypto = require("crypto");
+const hashPin = (pin) => crypto.createHash("sha256").update(String(pin)).digest("hex");
 
-initializeApp();
-const db = getFirestore();
+/** Форматируем номер в "21052019NNNN" */
+function buildUserId(seq) {
+  const tail = String(seq).padStart(SEQ_WIDTH, "0");
+  return `${ID_PREFIX}${tail}`;
+}
 
-// ===== helpers =====
-const NICK_RE = /^[А-Яа-яЁёІіЇїЄєҐґA-Za-z0-9 _.\-]{3,24}$/;
-const PIN_RE  = /^\d{4,8}$/;
-const sha256 = (s) => crypto.createHash("sha256").update(String(s)).digest("hex");
+/**
+ * Получить следующий порядковый номер регистрации атомарно.
+ * Создаёт meta/counters при первом запуске.
+ */
+async function allocateNextSequence() {
+  const ref = db.doc(COUNTER_DOC);
+  let newSeq;
 
-// 1) Регистрация + создание первого персонажа + вход
-//    PIN ХРАНИМ НА УРОВНЕ АККАУНТА: users/{uid}.pinHash
-exports.registerAndCreateCharacter = onCall(async (req) => {
-  const { nick, name, pin, noPin, race, element } = req.data || {};
+  await db.runTransaction(async (tx) => {
+    const snap = await tx.get(ref);
+    let data = snap.exists ? snap.data() : {};
+    let current = Number.isInteger(data[COUNTER_FIELD]) ? data[COUNTER_FIELD] : 0;
+    newSeq = current + 1;
+    tx.set(ref, { [COUNTER_FIELD]: newSeq }, { merge: true });
+  });
 
-  if (!nick || !NICK_RE.test(nick)) {
-    throw new HttpsError("invalid-argument", "Некорректный ник (3–24, буквы/цифры/пробел/._-).");
+  return newSeq;
+}
+
+/**
+ * REGISTER + CREATE CHARACTER
+ * Вход: { nick (name), pin?, noPin?, race, element }
+ * Результат: { token } — custom token c uid = "21052019NNNN"
+ */
+exports.registerAndCreateCharacter = onCall({ region: "us-central1" }, async (req) => {
+  const { nick, pin, noPin, race, element } = req.data || {};
+  const name = (nick || "").trim();
+
+  if (!name) {
+    throw new HttpsError("invalid-argument", "name is required");
   }
-  if (!name || String(name).trim().length < 2) {
-    throw new HttpsError("invalid-argument", "Имя персонажа обязательно.");
+
+  // Проверяем уникальность ника по ПОЛЮ name
+  const exists = await db.collection(USERS).where("name", "==", name).limit(1).get();
+  if (!exists.empty) {
+    throw new HttpsError("already-exists", "nickname already taken");
   }
-  if (!noPin && pin && !PIN_RE.test(pin)) {
-    throw new HttpsError("invalid-argument", "PIN: 4–8 цифр или отметьте «без PIN».");
+
+  // Выделяем следующий номер и формируем id
+  const seq = await allocateNextSequence();              // 1,2,3,...
+  const uid = buildUserId(seq);                          // 210520190001 ...
+
+  // Пишем профиль
+  const profile = {
+    uid,
+    name,                      // ник для логина
+    race: race || null,
+    element: element || null,
+    createdAt: Date.now(),
+    pinHash: noPin ? null : (pin ? hashPin(pin) : null), // если noPin=true — хэш = null
+  };
+
+  await db.collection(USERS).doc(uid).set(profile, { merge: false });
+
+  // Создаём (или обновляем) запись в Firebase Auth под тем же uid — чтобы выдать токен
+  try {
+    await auth.getUser(uid);
+  } catch (e) {
+    await auth.createUser({ uid });
   }
 
-  const uid = nick.trim();
-
-  // создать пользователя при необходимости
-  try { await getAuth().getUser(uid); }
-  catch { await getAuth().createUser({ uid, displayName: uid }); }
-
-  // сохранить PIN на аккаунт
-  await db.collection("users").doc(uid).set({
-    pinHash: noPin ? null : sha256(pin || ""),
-    createdAt: Date.now()
-  }, { merge: true });
-
-  // создать первого персонажа
-  const ref = await db.collection("users").doc(uid)
-    .collection("characters").add({
-      uid,
-      name: String(name).trim(),
-      race: race || "Натис",
-      element: element || null,
-      createdAt: Date.now()
-    });
-
-  const token = await getAuth().createCustomToken(uid);
-  return { token, characterId: ref.id };
-});
-
-// 2) Вход по ник+PIN (сверяем users/{uid}.pinHash)
-exports.loginWithPin = onCall(async (req) => {
-  const { nick, pin } = req.data || {};
-  if (!nick || !NICK_RE.test(nick)) throw new HttpsError("invalid-argument", "Некорректный ник.");
-  if (!pin || !PIN_RE.test(pin))   throw new HttpsError("invalid-argument", "Некорректный PIN.");
-
-  const uid = nick.trim();
-  const userDoc = await db.collection("users").doc(uid).get();
-  if (!userDoc.exists) throw new HttpsError("not-found", "Аккаунт не найден.");
-
-  const pinHash = userDoc.get("pinHash") || null;
-  if (!pinHash) throw new HttpsError("failed-precondition", "Для этого аккаунта PIN не установлен.");
-  if (pinHash !== sha256(pin)) throw new HttpsError("permission-denied", "Неверный PIN.");
-
-  const token = await getAuth().createCustomToken(uid);
+  // Возвращаем custom token
+  const token = await auth.createCustomToken(uid);
+  logger.info("registered", { uid, name });
   return { token };
 });
 
-// 3) Вход без PIN (для чекбокса «без PIN»)
-exports.loginUser = onCall(async (req) => {
+/**
+ * LOGIN без PIN
+ * Вход: { nick }
+ * Ищем по полю name, убеждаемся что pinHash == null.
+ * Выдаём токен с uid документа.
+ */
+exports.loginUser = onCall({ region: "us-central1" }, async (req) => {
   const { nick } = req.data || {};
-  if (!nick || !NICK_RE.test(nick)) throw new HttpsError("invalid-argument", "Некорректный ник.");
-  const token = await getAuth().createCustomToken(nick.trim());
+  const name = (nick || "").trim();
+  if (!name) throw new HttpsError("invalid-argument", "name is required");
+
+  const snap = await db.collection(USERS).where("name", "==", name).limit(1).get();
+  if (snap.empty) throw new HttpsError("not-found", "user not found");
+  const doc = snap.docs[0];
+  const user = doc.data();
+
+  if (user.pinHash) {
+    throw new HttpsError("failed-precondition", "pin is set; login without pin not allowed");
+  }
+
+  const uid = user.uid || doc.id;
+
+  try {
+    await auth.getUser(uid);
+  } catch (e) {
+    await auth.createUser({ uid });
+  }
+
+  const token = await auth.createCustomToken(uid);
   return { token };
 });
 
-// 4) Создание дополнительных персонажей (нужен вход)
-exports.createCharacter = onCall(async (req) => {
-  if (!req.auth) throw new HttpsError("unauthenticated", "Требуется вход.");
+/**
+ * LOGIN c PIN
+ * Вход: { nick, pin }
+ * Ищем по полю name, сравниваем PIN.
+ * Выдаём токен с uid документа.
+ */
+exports.loginWithPin = onCall({ region: "us-central1" }, async (req) => {
+  const { nick, pin } = req.data || {};
+  const name = (nick || "").trim();
+  const pinStr = String(pin || "");
 
-  const { name, race, element } = req.data || {};
-  if (!name || String(name).trim().length < 2) {
-    throw new HttpsError("invalid-argument", "Имя персонажа обязательно.");
+  if (!name || !pinStr) {
+    throw new HttpsError("invalid-argument", "name and pin are required");
   }
 
-  const ref = await db.collection("users").doc(req.auth.uid)
-    .collection("characters").add({
-      uid: req.auth.uid,
-      name: String(name).trim(),
-      race: race || "Натис",
-      element: element || null,
-      createdAt: Date.now()
-    });
+  const snap = await db.collection(USERS).where("name", "==", name).limit(1).get();
+  if (snap.empty) throw new HttpsError("not-found", "user not found");
+  const doc = snap.docs[0];
+  const user = doc.data();
 
-  return { id: ref.id };
+  if (!user.pinHash) {
+    throw new HttpsError("failed-precondition", "pin is not set for this user");
+  }
+
+  const ok = user.pinHash === hashPin(pinStr);
+  if (!ok) throw new HttpsError("permission-denied", "bad pin");
+
+  const uid = user.uid || doc.id;
+
+  try {
+    await auth.getUser(uid);
+  } catch (e) {
+    await auth.createUser({ uid });
+  }
+
+  const token = await auth.createCustomToken(uid);
+  return { token };
 });
 
-// 5) Сводка аккаунта (ник + последний персонаж)
-exports.getAccountSummary = onCall(async (req) => {
-  if (!req.auth) throw new HttpsError("unauthenticated", "Требуется вход.");
-  const uid = req.auth.uid;
+/**
+ * GET ACCOUNT SUMMARY
+ * Читает профиль по uid текущего авторизованного пользователя.
+ * Возвращает { uid, name, race, element }.
+ */
+exports.getAccountSummary = onCall({ region: "us-central1" }, async (req) => {
+  const uid = req.auth?.uid;
+  if (!uid) throw new HttpsError("unauthenticated", "not signed in");
 
-  const snap = await getFirestore()
-    .collection("users").doc(uid)
-    .collection("characters")
-    .orderBy("createdAt", "desc").limit(1)
-    .get();
+  const doc = await db.collection(USERS).doc(uid).get();
+  if (!doc.exists) throw new HttpsError("not-found", "profile not found");
 
-  let character = null;
-  if (!snap.empty) {
-    const d = snap.docs[0].data();
-    character = {
-      id: snap.docs[0].id,
-      name: d.name || "",
-      race: d.race || "",
-      element: d.element || null
-    };
-  }
-  return { uid, character };
+  const u = doc.data() || {};
+  const sum = {
+    uid,
+    name: u.name || null,
+    race: u.race || null,
+    element: u.element || null,
+  };
+  return sum;
 });

@@ -53,6 +53,7 @@ public class CreateCharacterView extends VerticalLayout {
 
         add(new H1("Создание персонажа"));
 
+        // элементы для выбора — без спец. значений NONE/ANY
         chooseAnyElement.setItems(Element.valuesWithoutSpecial());
         chooseAnyElement.setItemLabelGenerator(Element::title);
         chooseAnyElement.setVisible(false);
@@ -65,7 +66,7 @@ public class CreateCharacterView extends VerticalLayout {
         rollLine.setAlignItems(Alignment.CENTER);
         rollLine.setWidthFull();
         add(rollLine, chooseAnyElement, new Paragraph(
-            "Начальный элемент определяется броском 1d8. 8 — любой; 1 — без элемента (можно позже)."
+            "Начальный элемент определяется броском 1d8. 8 — можно выбрать любой элемент, 1 — без элемента (можно выбрать позже)."
         ));
 
         nickname.setPlaceholder("Например: Орлан");
@@ -118,6 +119,7 @@ public class CreateCharacterView extends VerticalLayout {
         // подключаем клиентский код Firebase
         UI.getCurrent().getPage().addJsModule("/firebase-app.js");
 
+        // восстановим состояние броска из сессии, если уже бросали
         Boolean locked = (Boolean) VaadinSession.getCurrent().getAttribute("create.roll.lock");
         Element stored = (Element) VaadinSession.getCurrent().getAttribute("create.roll.element");
         if (Boolean.TRUE.equals(locked)) {
@@ -156,17 +158,18 @@ public class CreateCharacterView extends VerticalLayout {
 
     private void applyElementToUI(Element el, Integer rolledNumberOrNull) {
         if (el == Element.ANY) {
-            resultSpan.setText((rolledNumberOrNull != null ? rolledNumberOrNull + " — " : "") +
-                "Вы можете выбрать любой элемент.");
+            resultSpan.setText((rolledNumberOrNull != null ? rolledNumberOrNull + " — " : "")
+                + "Вы можете выбрать любой элемент.");
             chooseAnyElement.clear();
             chooseAnyElement.setVisible(true);
             chooseAnyElement.focus();
         } else if (el == Element.NONE) {
-            resultSpan.setText((rolledNumberOrNull != null ? rolledNumberOrNull + " — " : "") +
-                "Без элемента (можно выбрать позже).");
+            resultSpan.setText((rolledNumberOrNull != null ? rolledNumberOrNull + " — " : "")
+                + "Без элемента (можно выбрать позже).");
             chooseAnyElement.setVisible(false);
         } else {
-            resultSpan.setText((rolledNumberOrNull != null ? rolledNumberOrNull + " — " : "") + el.title());
+            resultSpan.setText((rolledNumberOrNull != null ? rolledNumberOrNull + " — " : "")
+                + el.title());
             chooseAnyElement.setVisible(false);
         }
     }
@@ -201,38 +204,48 @@ public class CreateCharacterView extends VerticalLayout {
             noPin = false;
         }
 
-        // Готовим payload для fbRegisterAndCreate:
-        // nick — ник аккаунта; name — имя персонажа (если отдельного поля нет, берём ник);
+        // === ПАЙЛОАД ДЛЯ Cloud Function ===
+        // В БД пишем расу и элемент как человекочитаемые строки (title()).
         JsonObject payload = Json.createObject();
         payload.put("nick", nick);
-        payload.put("name", nick); // если будет отдельное поле имени — подставь его сюда
-        payload.put("race", r.name());
-        payload.put("element", finalElement != null ? finalElement.name() : null);
+        payload.put("name", nick); // отдельного поля имени нет — используем ник
+        payload.put("race", r.title()); // CHANGED: хранить название расы
+        payload.put("element", finalElement != null ? finalElement.title() : null); // CHANGED
         payload.put("pin", pin != null ? pin : "");
         payload.put("noPin", noPin);
 
+        // Вызовем fbRegisterAndCreate и после удачи — на /profile
         UI.getCurrent().getPage().executeJs("""
-        return (async () => {
+          return (async () => {
             try {
-            if (!window._fb || !window._fb.fbRegisterAndCreate) {
+              if (!window._fb || !window._fb.fbRegisterAndCreate) {
                 alert('Firebase: не найден _fb.fbRegisterAndCreate. Проверь /firebase-app.js.');
                 return false;
-            }
-            const res = await window._fb.fbRegisterAndCreate($0);
-            // res: { token, characterId }
-            window.location = '/login'; // или на страницу персонажа
-            return true;
+              }
+              const res = await window._fb.fbRegisterAndCreate($0);
+              // { token, characterId } — авторизация уже выполнена
+              window.location = '/profile'; // CHANGED
+              return true;
             } catch (e) {
-            alert('Ошибка сохранения: ' + (e?.message || e));
-            return false;
+              alert('Ошибка сохранения: ' + (e?.message || e));
+              return false;
             }
-        })();
+          })();
         """, payload);
     }
 
+    // ===== Справочники =====
+
     public enum Element {
-        NONE("Без элемента"), FIRE("Огонь"), ICE("Лёд"), WATER("Вода"),
-        WIND("Ветер"), EARTH("Земля"), LIGHTNING("Молния"), ANY("Любой элемент");
+        NONE("Без элемента"),
+        FIRE("Огонь"),
+        ICE("Лёд"),
+        WATER("Вода"),
+        WIND("Ветер"),
+        EARTH("Земля"),
+        LIGHTNING("Молния"),
+        ANY("Любой элемент");
+
         private final String title;
         Element(String title) { this.title = title; }
         public String title() { return title; }
@@ -248,6 +261,7 @@ public class CreateCharacterView extends VerticalLayout {
         ANER("Анер", "+3 к инициативе и +7 HP."),
         HUMAN("Человек", "+1 дополнительная черта при создании."),
         ELCHAR("Эльчар", "+10% к магическому урону и +3 ЭМ.");
+
         private final String title, desc;
         Race(String t, String d) { title = t; desc = d; }
         public String title() { return title; }
